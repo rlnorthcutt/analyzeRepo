@@ -366,7 +366,7 @@ func pipeline(ctx context.Context, cfg tui.Config, outDir string) error {
 
 	if !flagDryRun {
 		usage := client.GetUsage()
-		fmt.Printf("\n  %sClaude%s  %d calls  ·  %s in  ·  %s out\n",
+		fmt.Printf("\n  %sClaude%s  %d calls  ·  %s tokens in  ·  %s tokens out\n",
 			ansiDim, ansiReset,
 			usage.Calls,
 			formatTokenCount(usage.InputTokens),

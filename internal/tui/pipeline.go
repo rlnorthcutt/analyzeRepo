@@ -120,19 +120,22 @@ func progTick() tea.Cmd {
 
 // pipelineModel is the Bubble Tea model for the live file-analysis progress view.
 type pipelineModel struct {
-	progPct     float64            // current animated percentage (0.0–1.0)
-	progTarget  float64            // target percentage (done/total)
-	progTicking bool               // true while a progTick is in flight
-	total       int
-	done        int
-	failed      int
-	current     string             // file path being analysed right now
-	verb        string             // flavour verb for current file
-	analyses    []analyze.FileAnalysis
-	finished    bool
-	userQuit    bool               // true when the user pressed Ctrl+C
-	cancel      context.CancelFunc // cancels the analysis goroutine
-	width       int
+	progPct      float64            // current animated percentage (0.0–1.0)
+	progTarget   float64            // target percentage (done/total)
+	progTicking  bool               // true while a progTick is in flight
+	total        int
+	done         int
+	failed       int
+	current      string             // file path being analysed right now
+	verb         string             // flavour verb for current file
+	analyses     []analyze.FileAnalysis
+	panels       []string           // pre-rendered file panels, newest first
+	scrollOffset int                // viewport scroll position in lines (0 = top/newest)
+	finished     bool
+	userQuit     bool               // true when the user pressed Ctrl+C
+	cancel       context.CancelFunc // cancels the analysis goroutine
+	width        int
+	height       int
 }
 
 func newPipelineModel(total int, cancel context.CancelFunc) pipelineModel {
@@ -151,16 +154,35 @@ func (m pipelineModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
+		switch msg.String() {
+		case "ctrl+c":
 			if m.cancel != nil {
 				m.cancel()
 			}
 			m.userQuit = true
 			return m, tea.Quit
+		case "down", "j":
+			m.scrollOffset++
+			m.clampScroll()
+		case "up", "k":
+			m.scrollOffset--
+			m.clampScroll()
+		case "pgdown", "ctrl+d":
+			m.scrollOffset += m.viewportHeight()
+			m.clampScroll()
+		case "pgup", "ctrl+u":
+			m.scrollOffset -= m.viewportHeight()
+			m.clampScroll()
+		case "home", "g":
+			m.scrollOffset = 0
+		case "end", "G":
+			m.scrollOffset = m.maxScroll()
+			m.clampScroll()
 		}
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
 		return m, nil
 
 	case currentFileMsg:
@@ -179,17 +201,22 @@ func (m pipelineModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.done++
 
-		// Print a persistent panel above the progress bar.
+		// Prepend panel to viewport (newest at top).
+		// If the user has scrolled down, shift the offset so the view
+		// doesn't jump to different content when the new panel is inserted.
 		panel := renderFilePanel(msg.analysis, msg.err, m.width)
-		cmd := tea.Printf("%s", panel)
+		if m.scrollOffset > 0 {
+			m.scrollOffset += panelLineCount(panel)
+		}
+		m.panels = append([]string{panel}, m.panels...)
 
 		// Advance the progress target and start the easing animation if idle.
 		m.progTarget = float64(m.done) / float64(m.total)
 		if !m.progTicking {
 			m.progTicking = true
-			return m, tea.Batch(cmd, progTick())
+			return m, progTick()
 		}
-		return m, cmd
+		return m, nil
 
 	case pipelineDoneMsg:
 		m.finished = true
@@ -211,33 +238,129 @@ func (m pipelineModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// panelLineCount returns the number of lines a rendered panel string occupies
+// when split by newline (including its trailing blank separator line).
+func panelLineCount(panel string) int {
+	return strings.Count(panel, "\n")
+}
+
+// allPanelLines flattens m.panels (newest first) into a single line slice.
+func (m pipelineModel) allPanelLines() []string {
+	var lines []string
+	for _, p := range m.panels {
+		lines = append(lines, strings.Split(p, "\n")...)
+	}
+	return lines
+}
+
+// viewportHeight returns the fixed height (in lines) of the panel viewport.
+// min = ceil(2.5 × panelLines), max = termH/2, whichever is larger.
+func (m pipelineModel) viewportHeight() int {
+	const panelLines = 5 // 4 border+content lines + 1 blank separator
+	minH := int(math.Ceil(2.5 * panelLines)) // 13
+	if m.height > 0 {
+		if half := m.height / 2; half > minH {
+			return half
+		}
+	}
+	return minH
+}
+
+// maxScroll returns the maximum valid scrollOffset.
+func (m pipelineModel) maxScroll() int {
+	total := len(m.allPanelLines())
+	vpH := m.viewportHeight()
+	if max := total - vpH; max > 0 {
+		return max
+	}
+	return 0
+}
+
+// clampScroll keeps scrollOffset within [0, maxScroll].
+func (m *pipelineModel) clampScroll() {
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+	if max := m.maxScroll(); m.scrollOffset > max {
+		m.scrollOffset = max
+	}
+}
+
 func (m pipelineModel) View() string {
 	width := m.width
 	if width < 40 {
 		width = 80
 	}
-
-	// When finished, leave the completed bar on screen so it persists while
-	// reports are being written.
-	if m.finished {
-		return "  " + renderGradientBar(1.0, width-4) + "\n"
-	}
+	barWidth := width - 4
+	vpH := m.viewportHeight()
 
 	var sb strings.Builder
 
-	// Current file indicator.
-	if m.current != "" {
-		verb := dimStyle.Render(m.verb)
-		file := labelStyle.Render(m.current)
-		sb.WriteString(fmt.Sprintf("  %s %s\n", verb, file))
+	if m.finished {
+		// Progress bar (completed).
+		sb.WriteString("  " + renderGradientBar(1.0, barWidth) + "\n")
+	} else {
+		// ── Progress section (above viewport) ───────────────────────────────
+
+		// Current file indicator (always 1 line).
+		if m.current != "" {
+			sb.WriteString(fmt.Sprintf("  %s %s\n",
+				dimStyle.Render(m.verb),
+				labelStyle.Render(m.current),
+			))
+		} else {
+			sb.WriteString("\n")
+		}
+
+		// Counter + gradient bar.
+		counter := dimStyle.Render(fmt.Sprintf("  %d / %d files", m.done, m.total))
+		sb.WriteString(counter + "\n")
+		sb.WriteString("  " + renderGradientBar(m.progPct, barWidth) + "\n")
 	}
 
-	// Counter.
-	counter := dimStyle.Render(fmt.Sprintf("  %d / %d files", m.done, m.total))
-	sb.WriteString(counter + "\n")
+	// ── Scroll-hint separator ────────────────────────────────────────────────
+	allLines := m.allPanelLines()
+	totalLines := len(allLines)
+	canScroll := totalLines > vpH
 
-	// Gradient progress bar.
-	sb.WriteString("  " + renderGradientBar(m.progPct, width-4) + "\n")
+	var hint string
+	if canScroll {
+		top := m.scrollOffset + 1
+		bot := m.scrollOffset + vpH
+		if bot > totalLines {
+			bot = totalLines
+		}
+		hint = fmt.Sprintf("  showing %d–%d of %d  ↑↓  j/k", top, bot, totalLines)
+	} else if m.done > 0 {
+		hint = fmt.Sprintf("  %d analyzed", m.done)
+	}
+	hintLine := dimStyle.Render(hint)
+	// Fill the rest of the hint line with dim dashes for a subtle rule.
+	visLen := len([]rune(hint))
+	dashCount := width - visLen - 4
+	if dashCount > 0 {
+		hintLine = dimStyle.Render(hint + "  " + strings.Repeat("─", dashCount))
+	}
+	sb.WriteString(hintLine + "\n")
+
+	// ── Viewport ─────────────────────────────────────────────────────────────
+	start := m.scrollOffset
+	if start > totalLines {
+		start = totalLines
+	}
+	end := start + vpH
+	if end > totalLines {
+		end = totalLines
+	}
+	visible := allLines[start:end]
+
+	for _, line := range visible {
+		sb.WriteString(line + "\n")
+	}
+	// Pad with blank lines to keep height constant.
+	for i := len(visible); i < vpH; i++ {
+		sb.WriteString("\n")
+	}
 
 	return sb.String()
 }
