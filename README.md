@@ -1,7 +1,5 @@
 # analyzerepo
 
-![analyzerepo screenshot](analyzeRep-screen.png)
-
 **Understand any codebase in minutes — and make Claude Code actually useful from day one.**
 
 `analyzerepo` points Claude AI at a GitHub repository or local codebase and produces three ready-to-use Markdown files: an onboarding guide for new contributors, a per-file analysis with prioritized improvement suggestions, and a `CLAUDE.md` that gives Claude Code the context it needs to be genuinely helpful instead of generically cautious.
@@ -9,6 +7,34 @@
 ```
 analyzerepo https://github.com/you/your-project
 ```
+
+---
+
+![analyzerepo screenshot](analyzeRep-screen.png)
+
+---
+
+## Quick start
+
+**Prerequisites:** Either an `ANTHROPIC_API_KEY` environment variable or the [Claude CLI](https://claude.ai/download) installed.
+
+**Install:** Download the [latest binary](https://github.com/rlnorthcutt/analyzeRepo/raw/refs/heads/main/analyzeRepo), make it executable, and put it on your `PATH`. No runtime or language install required.
+
+```bash
+# Analyze a GitHub repo
+analyzerepo https://github.com/charmbracelet/bubbletea
+
+# Analyze a local project
+analyzerepo ./my-project
+
+# Choose which reports to generate
+analyzerepo ./my-project --reports onboarding,claude
+
+# Write output to a specific directory
+analyzerepo ./my-project --output ./docs/ai
+```
+
+The first run launches an interactive wizard. Every option can also be set via flags for scripted use.
 
 ---
 
@@ -44,30 +70,6 @@ This format is designed so you can paste a suggestion directly into a Claude Cod
 
 ### `CLAUDE.md`
 A project-specific context file that Claude Code reads automatically. It describes the architecture, key entry points, conventions, and what to watch out for. Drop it in your repo root and every Claude Code session starts informed.
-
----
-
-## Quick start
-
-**Prerequisites:** Either an `ANTHROPIC_API_KEY` environment variable or the [Claude CLI](https://claude.ai/download) installed.
-
-**Install:** Download the latest binary for your platform from the [Releases page](https://github.com/rlnorthcutt/analyzeRepo/releases), make it executable, and put it on your `PATH`. No runtime or language install required.
-
-```bash
-# Analyze a GitHub repo
-analyzerepo https://github.com/charmbracelet/bubbletea
-
-# Analyze a local project
-analyzerepo ./my-project
-
-# Choose which reports to generate
-analyzerepo ./my-project --reports onboarding,claude
-
-# Write output to a specific directory
-analyzerepo ./my-project --output ./docs/ai
-```
-
-The first run launches an interactive wizard. Every option can also be set via flags for scripted use.
 
 ---
 
