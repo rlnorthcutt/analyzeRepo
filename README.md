@@ -1,5 +1,7 @@
 # analyzerepo
 
+![analyzerepo screenshot](analyzeRep-screen.png)
+
 **Understand any codebase in minutes — and make Claude Code actually useful from day one.**
 
 `analyzerepo` points Claude AI at a GitHub repository or local codebase and produces three ready-to-use Markdown files: an onboarding guide for new contributors, a per-file analysis with prioritized improvement suggestions, and a `CLAUDE.md` that gives Claude Code the context it needs to be genuinely helpful instead of generically cautious.
@@ -47,12 +49,11 @@ A project-specific context file that Claude Code reads automatically. It describ
 
 ## Quick start
 
-**Prerequisites:** Go 1.21+ and either an `ANTHROPIC_API_KEY` environment variable or the [Claude CLI](https://claude.ai/download) installed.
+**Prerequisites:** Either an `ANTHROPIC_API_KEY` environment variable or the [Claude CLI](https://claude.ai/download) installed.
+
+**Install:** Download the latest binary for your platform from the [Releases page](https://github.com/rlnorthcutt/analyzeRepo/releases), make it executable, and put it on your `PATH`. No runtime or language install required.
 
 ```bash
-# Install
-go install github.com/rlnorthcutt/analyzeRepo@latest
-
 # Analyze a GitHub repo
 analyzerepo https://github.com/charmbracelet/bubbletea
 
@@ -175,6 +176,8 @@ Everything else is fair game. Use `--full` to include all files; omit it to let 
 ---
 
 ## Development
+
+Go 1.21+ is required to build from source.
 
 ```bash
 git clone https://github.com/rlnorthcutt/analyzeRepo
