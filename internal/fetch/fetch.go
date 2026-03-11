@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -52,8 +53,8 @@ var ignoreFilenames = map[string]bool{
 // It checks all path components against ignoreDirs, the filename against ignoreFilenames,
 // and the extension against ignoreExtensions.
 func ShouldIgnore(relPath string) bool {
-	parts := strings.Split(filepath.ToSlash(relPath), "/")
-	for _, part := range parts {
+	parts := strings.SplitSeq(filepath.ToSlash(relPath), "/")
+	for part := range parts {
 		if ignoreDirs[part] {
 			return true
 		}
@@ -78,12 +79,7 @@ func IsBinary(path string) bool {
 	if err != nil {
 		return true
 	}
-	for _, b := range buf[:n] {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(buf[:n], 0)
 }
 
 // BuildFileList walks root and returns absolute paths of all non-ignored,

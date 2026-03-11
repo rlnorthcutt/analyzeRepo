@@ -139,7 +139,7 @@ func TestMaxScroll_withPanels(t *testing.T) {
 	}
 
 	// Add enough panels to exceed viewport.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		m.panels = append(m.panels, "line1\nline2\nline3\nline4\n")
 	}
 	if got := m.maxScroll(); got <= 0 {

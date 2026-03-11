@@ -166,7 +166,7 @@ func run(cmd *cobra.Command, args []string) error {
 func parseReports(raw string) map[string]bool {
 	valid := map[string]bool{"onboarding": true, "improvement": true, "claude": true, "all": true}
 	selected := make(map[string]bool)
-	for _, r := range strings.Split(raw, ",") {
+	for r := range strings.SplitSeq(raw, ",") {
 		r = strings.TrimSpace(strings.ToLower(r))
 		if !valid[r] {
 			return nil
@@ -457,14 +457,6 @@ func formatTokenCount(n int64) string {
 	default:
 		return fmt.Sprintf("%d", n)
 	}
-}
-
-// min returns the smaller of a and b.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // actionVerbs is a list of flavour verbs shown next to each file during analysis.

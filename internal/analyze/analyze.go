@@ -32,11 +32,11 @@ const (
 // Suggestion represents an actionable improvement recommendation for a file.
 type Suggestion struct {
 	Type        string `json:"type"`
-	File        string `json:"file"`              // target file (may differ from the analyzed file)
-	Effort      string `json:"effort"`            // trivial | small | medium | large
+	File        string `json:"file"`   // target file (may differ from the analyzed file)
+	Effort      string `json:"effort"` // trivial | small | medium | large
 	Description string `json:"description"`
-	DoneWhen    string `json:"done_when"`         // single verifiable completion condition
-	Blocks      string `json:"blocks,omitempty"`  // downstream concern blocked by this change
+	DoneWhen    string `json:"done_when"`        // single verifiable completion condition
+	Blocks      string `json:"blocks,omitempty"` // downstream concern blocked by this change
 }
 
 // FileAnalysis holds the structured analysis result for a single source file.
@@ -558,12 +558,4 @@ func dryRunRole(relPath string) string {
 	default:
 		return "core"
 	}
-}
-
-// min returns the smaller of a and b.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

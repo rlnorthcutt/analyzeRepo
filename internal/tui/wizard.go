@@ -5,6 +5,7 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -46,11 +47,11 @@ func renderGradientBanner() string {
 	subtitleRow := padLeft + lipgloss.PlaceHorizontal(contentW, lipgloss.Center, subtitleStr) + strings.Repeat(" ", padH)
 
 	interior := []string{}
-	for i := 0; i < padV; i++ {
+	for range padV {
 		interior = append(interior, blank)
 	}
 	interior = append(interior, titleRow, subtitleRow)
-	for i := 0; i < padV; i++ {
+	for range padV {
 		interior = append(interior, blank)
 	}
 
@@ -336,9 +337,7 @@ func (m wizardModel) handleEnter() (tea.Model, tea.Cmd) {
 	case stepReports:
 		// Enter confirms whatever is currently checked.
 		m.Result.Reports = make(map[string]bool, len(m.selection))
-		for k, v := range m.selection {
-			m.Result.Reports[k] = v
-		}
+		maps.Copy(m.Result.Reports, m.selection)
 		return m.advance()
 
 	case stepFull:
@@ -376,9 +375,7 @@ func (m *wizardModel) toggleReport(token string) {
 		return
 	}
 	candidate := make(map[string]bool, len(m.selection))
-	for k, v := range m.selection {
-		candidate[k] = v
-	}
+	maps.Copy(candidate, m.selection)
 	if candidate[key] {
 		delete(candidate, key)
 	} else {

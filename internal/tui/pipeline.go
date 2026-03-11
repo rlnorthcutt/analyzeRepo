@@ -72,10 +72,7 @@ func renderGradientBar(pct float64, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	filled := int(math.Round(pct * float64(width)))
-	if filled > width {
-		filled = width
-	}
+	filled := min(int(math.Round(pct*float64(width))), width)
 	var sb strings.Builder
 	for i := 0; i < filled; i++ {
 		var t float64
@@ -120,17 +117,17 @@ func progTick() tea.Cmd {
 
 // pipelineModel is the Bubble Tea model for the live file-analysis progress view.
 type pipelineModel struct {
-	progPct      float64            // current animated percentage (0.0–1.0)
-	progTarget   float64            // target percentage (done/total)
-	progTicking  bool               // true while a progTick is in flight
+	progPct      float64 // current animated percentage (0.0–1.0)
+	progTarget   float64 // target percentage (done/total)
+	progTicking  bool    // true while a progTick is in flight
 	total        int
 	done         int
 	failed       int
-	current      string             // file path being analysed right now
-	verb         string             // flavour verb for current file
+	current      string // file path being analysed right now
+	verb         string // flavour verb for current file
 	analyses     []analyze.FileAnalysis
-	panels       []string           // pre-rendered file panels, newest first
-	scrollOffset int                // viewport scroll position in lines (0 = top/newest)
+	panels       []string // pre-rendered file panels, newest first
+	scrollOffset int      // viewport scroll position in lines (0 = top/newest)
 	finished     bool
 	userQuit     bool               // true when the user pressed Ctrl+C
 	cancel       context.CancelFunc // cancels the analysis goroutine
@@ -256,7 +253,7 @@ func (m pipelineModel) allPanelLines() []string {
 // viewportHeight returns the fixed height (in lines) of the panel viewport.
 // min = ceil(2.5 × panelLines), max = termH/2, whichever is larger.
 func (m pipelineModel) viewportHeight() int {
-	const panelLines = 5 // 4 border+content lines + 1 blank separator
+	const panelLines = 5                     // 4 border+content lines + 1 blank separator
 	minH := int(math.Ceil(2.5 * panelLines)) // 13
 	if m.height > 0 {
 		if half := m.height / 2; half > minH {
@@ -326,10 +323,7 @@ func (m pipelineModel) View() string {
 	var hint string
 	if canScroll {
 		top := m.scrollOffset + 1
-		bot := m.scrollOffset + vpH
-		if bot > totalLines {
-			bot = totalLines
-		}
+		bot := min(m.scrollOffset+vpH, totalLines)
 		hint = fmt.Sprintf("  showing %d–%d of %d  ↑↓  j/k", top, bot, totalLines)
 	} else if m.done > 0 {
 		hint = fmt.Sprintf("  %d analyzed", m.done)
@@ -344,14 +338,8 @@ func (m pipelineModel) View() string {
 	sb.WriteString(hintLine + "\n")
 
 	// ── Viewport ─────────────────────────────────────────────────────────────
-	start := m.scrollOffset
-	if start > totalLines {
-		start = totalLines
-	}
-	end := start + vpH
-	if end > totalLines {
-		end = totalLines
-	}
+	start := min(m.scrollOffset, totalLines)
+	end := min(start+vpH, totalLines)
 	visible := allLines[start:end]
 
 	for _, line := range visible {
