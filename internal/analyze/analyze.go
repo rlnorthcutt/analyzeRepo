@@ -1,33 +1,31 @@
-// Package analyze handles all Claude AI interactions: backend detection,
+// Package analyze handles all LLM interactions: backend detection,
 // per-file analysis, key file selection, and report generation.
-// All exported functions are pure in their logic — side effects are limited
-// to network calls and reading the files they are explicitly given.
+// Supports multiple providers: Anthropic, Azure OpenAI, OpenAI, and Ollama.
 package analyze
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
-
-	anthropic "github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/rlnorthcutt/analyzeRepo/internal/stats"
 )
 
 const (
-	// model is the Claude model used for all analysis calls.
-	model = "claude-opus-4-6"
-
 	// maxFileBytes is the maximum number of characters read from a single file.
-	// Content beyond this limit is truncated before sending to Claude.
+	// Content beyond this limit is truncated before sending to the LLM.
 	maxFileBytes = 8_000
 )
+
+// Usage holds accumulated token and call counts for a provider session.
+type Usage struct {
+	InputTokens  int64
+	OutputTokens int64
+	Calls        int64
+}
 
 // Suggestion represents an actionable improvement recommendation for a file.
 type Suggestion struct {
@@ -47,187 +45,54 @@ type FileAnalysis struct {
 	Suggestions []Suggestion `json:"suggestions"`
 }
 
-// backendKind identifies which Claude backend a Client will use.
-type backendKind int
-
-const (
-	backendAPI backendKind = iota
-	backendCLI
-)
-
-// Usage holds accumulated token and call counts for a Client session.
-type Usage struct {
-	InputTokens  int64
-	OutputTokens int64
-	Calls        int64
-}
-
-// Client wraps the available Claude backends.
-// The API key backend takes priority over the CLI backend.
+// Client wraps an LLM provider for analysis operations.
 type Client struct {
-	api          anthropic.Client // valid when hasAPI is true
-	hasAPI       bool             // true when ANTHROPIC_API_KEY is set
-	hasCLI       bool
-	primary      backendKind
-	DryRun       bool // when true, all calls return stub data without hitting Claude
-	inputTokens  atomic.Int64
-	outputTokens atomic.Int64
-	calls        atomic.Int64
+	provider Provider
+	DryRun   bool // when true, all calls return stub data without hitting the LLM
 }
 
 // GetUsage returns a snapshot of accumulated token usage and call counts.
 func (c *Client) GetUsage() Usage {
-	return Usage{
-		InputTokens:  c.inputTokens.Load(),
-		OutputTokens: c.outputTokens.Load(),
-		Calls:        c.calls.Load(),
+	if c.provider == nil {
+		return Usage{}
 	}
+	return c.provider.GetUsage()
 }
 
-// NewClient detects the available Claude backend and returns a ready Client.
-// The API key (ANTHROPIC_API_KEY env var) takes priority; the Claude CLI
-// is used as a fallback. Returns an error if neither is available.
+// ProviderName returns the name of the active provider.
+func (c *Client) ProviderName() string {
+	if c.provider == nil {
+		return "none"
+	}
+	return c.provider.Name()
+}
+
+// NewClient detects the best available LLM provider and returns a ready Client.
+// Provider priority: Azure > OpenAI > Anthropic > Ollama
+// Use NewClientWithConfig for explicit provider selection.
 func NewClient() (*Client, error) {
-	c := &Client{}
-
-	if os.Getenv("ANTHROPIC_API_KEY") != "" {
-		c.api = anthropic.NewClient() // reads ANTHROPIC_API_KEY automatically
-		c.hasAPI = true
-		c.primary = backendAPI
-	}
-
-	if _, err := exec.LookPath("claude"); err == nil {
-		c.hasCLI = true
-		if !c.hasAPI {
-			c.primary = backendCLI
-		}
-	}
-
-	if !c.hasAPI && !c.hasCLI {
-		return nil, errors.New(
-			"no Claude backend available — set ANTHROPIC_API_KEY or " +
-				"install the Claude CLI (https://claude.ai/code)",
-		)
-	}
-	return c, nil
+	return NewClientWithConfig(ProviderConfig{})
 }
 
-// NewDryRunClient returns a Client that never contacts Claude.
+// NewClientWithConfig creates a Client with explicit configuration.
+func NewClientWithConfig(cfg ProviderConfig) (*Client, error) {
+	provider, err := DetectProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{provider: provider}, nil
+}
+
+// NewDryRunClient returns a Client that never contacts any LLM.
 // All analysis functions return plausible stub data so the full pipeline
 // can be exercised without an API key or network access.
 func NewDryRunClient() *Client {
 	return &Client{DryRun: true}
 }
 
-// call sends prompt to Claude and returns the text response.
-// It tries the API first (if configured), falling back to the CLI on auth failure.
+// call sends prompt to the LLM and returns the text response.
 func (c *Client) call(ctx context.Context, prompt string, maxTokens int64) (string, error) {
-	if c.primary == backendAPI {
-		text, err := c.callAPI(ctx, prompt, maxTokens)
-		if err != nil {
-			if isAuthError(err) && c.hasCLI {
-				// API key present but invalid — fall back to CLI.
-				return c.callCLI(ctx, prompt)
-			}
-			return "", err
-		}
-		return text, nil
-	}
-	return c.callCLI(ctx, prompt)
-}
-
-// callAPI sends the prompt through the Anthropic SDK.
-func (c *Client) callAPI(ctx context.Context, prompt string, maxTokens int64) (string, error) {
-	resp, err := c.api.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.ModelClaudeOpus4_6,
-		MaxTokens: maxTokens,
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("claude API: %w", err)
-	}
-
-	c.inputTokens.Add(resp.Usage.InputTokens)
-	c.outputTokens.Add(resp.Usage.OutputTokens)
-	c.calls.Add(1)
-
-	var sb strings.Builder
-	for _, block := range resp.Content {
-		switch v := block.AsAny().(type) {
-		case anthropic.TextBlock:
-			sb.WriteString(v.Text)
-		}
-	}
-	return sb.String(), nil
-}
-
-// cliJSONResponse is the top-level structure returned by `claude --output-format json`.
-type cliJSONResponse struct {
-	Result string `json:"result"`
-	Usage  struct {
-		InputTokens  int64 `json:"input_tokens"`
-		OutputTokens int64 `json:"output_tokens"`
-	} `json:"usage"`
-}
-
-// callCLI sends the prompt to the `claude` CLI subprocess.
-// It strips the CLAUDECODE env var so nested invocations work inside a Claude Code session.
-func (c *Client) callCLI(ctx context.Context, prompt string) (string, error) {
-	// --tools "" disables all built-in tools so the CLI acts as a pure text
-	// generator rather than spinning up an agentic session that may call Write.
-	// The prompt is fed via stdin because --tools is variadic and would
-	// otherwise consume the positional prompt argument as a tool name.
-	// --output-format json lets us capture token usage from the response.
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--no-session-persistence",
-		"--output-format", "json", "--tools", "")
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Env = filterEnv("CLAUDECODE")
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			return "", fmt.Errorf("claude CLI: %s", strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		return "", fmt.Errorf("claude CLI: %w", err)
-	}
-
-	var parsed cliJSONResponse
-	if jsonErr := json.Unmarshal(out, &parsed); jsonErr != nil {
-		// JSON parsing failed — fall back to treating the output as plain text.
-		return strings.TrimSpace(string(out)), nil
-	}
-
-	c.inputTokens.Add(parsed.Usage.InputTokens)
-	c.outputTokens.Add(parsed.Usage.OutputTokens)
-	c.calls.Add(1)
-
-	return parsed.Result, nil
-}
-
-// isAuthError reports whether err indicates an HTTP 401 authentication failure.
-func isAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "authentication_error") ||
-		strings.Contains(msg, "status 401") ||
-		strings.Contains(msg, "401")
-}
-
-// filterEnv returns os.Environ() with any variable named key removed.
-func filterEnv(key string) []string {
-	env := os.Environ()
-	out := make([]string, 0, len(env))
-	prefix := key + "="
-	for _, e := range env {
-		if !strings.HasPrefix(e, prefix) {
-			out = append(out, e)
-		}
-	}
-	return out
+	return c.provider.Call(ctx, prompt, maxTokens)
 }
 
 // stripFences removes leading/trailing markdown code fences from text.
@@ -242,7 +107,7 @@ func stripFences(text string) string {
 	return strings.TrimSpace(text)
 }
 
-// SelectKeyFiles asks Claude to identify the most important files (up to 20)
+// SelectKeyFiles asks the LLM to identify the most important files (up to 20)
 // from the given list. files must be absolute paths; root is the repo root.
 // Falls back to returning files unchanged if selection fails.
 func SelectKeyFiles(ctx context.Context, c *Client, root string, files []string, treeStr string) ([]string, error) {
@@ -301,7 +166,7 @@ Respond with only a raw JSON object, no markdown fences. Example:
 	return selected, nil
 }
 
-// AnalyzeFile sends a single file to Claude and returns structured analysis.
+// AnalyzeFile sends a single file to the LLM and returns structured analysis.
 // root is the repo root; relPath is the file path relative to root.
 func AnalyzeFile(ctx context.Context, c *Client, root, relPath string) (FileAnalysis, error) {
 	if c.DryRun {
@@ -367,7 +232,7 @@ Respond with only a raw JSON object, no markdown fences.`, relPath, text)
 // suitable for inclusion in ONBOARDING.md.
 func GenerateExecutiveSummary(ctx context.Context, c *Client, analyses []FileAnalysis, s stats.Stats, treeStr string) (string, error) {
 	if c.DryRun {
-		return "## Purpose\n\n_[dry-run] Executive summary skipped — no Claude call made._\n\n" +
+		return "## Purpose\n\n_[dry-run] Executive summary skipped — no LLM call made._\n\n" +
 			"## Architecture\n\n_Run without `--dry-run` to generate a real summary._\n", nil
 	}
 	prompt := fmt.Sprintf(`Write a developer onboarding summary for the codebase described below.
@@ -401,7 +266,7 @@ File analyses:
 // GenerateClaudeMD produces a CLAUDE.md context file for AI coding assistants.
 func GenerateClaudeMD(ctx context.Context, c *Client, analyses []FileAnalysis, s stats.Stats, treeStr string) (string, error) {
 	if c.DryRun {
-		return "# CLAUDE.md\n\n_[dry-run] CLAUDE.md generation skipped — no Claude call made._\n\n" +
+		return "# CLAUDE.md\n\n_[dry-run] CLAUDE.md generation skipped — no LLM call made._\n\n" +
 			"Run without `--dry-run` to generate real content.\n", nil
 	}
 	prompt := fmt.Sprintf(`Generate the complete raw Markdown content of a CLAUDE.md file for the codebase described below.
@@ -495,7 +360,7 @@ func suggestionsSummary(analyses []FileAnalysis) string {
 
 // ── Usage estimation ──────────────────────────────────────────────────────────
 
-// EstimateUsage returns a rough pre-run estimate of Claude API calls and input
+// EstimateUsage returns a rough pre-run estimate of LLM API calls and input
 // tokens for the given file set and report selection.
 //
 // The estimate uses os.Stat (no file reads) to get sizes, caps each file at
@@ -535,7 +400,7 @@ func EstimateUsage(files []string, reports map[string]bool) (calls int, inputTok
 // ── Dry-run helpers ───────────────────────────────────────────────────────────
 
 // dryRunRole guesses a file role from its name and extension so dry-run output
-// looks plausible without touching Claude.
+// looks plausible without touching the LLM.
 func dryRunRole(relPath string) string {
 	name := strings.ToLower(filepath.Base(relPath))
 	ext := strings.ToLower(filepath.Ext(relPath))

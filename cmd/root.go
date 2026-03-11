@@ -40,6 +40,8 @@ var (
 	flagOutput         string
 	flagNonInteractive bool
 	flagDryRun         bool
+	flagProvider       string
+	flagModel          string
 )
 
 // Execute runs the root command. Called by main.
@@ -78,7 +80,11 @@ func init() {
 	rootCmd.Flags().BoolVar(&flagNonInteractive, "non-interactive", false,
 		"skip all prompts; use defaults for any unset flags")
 	rootCmd.Flags().BoolVar(&flagDryRun, "dry-run", false,
-		"walk through the full pipeline without calling Claude (for testing)")
+		"walk through the full pipeline without calling any LLM (for testing)")
+	rootCmd.Flags().StringVar(&flagProvider, "provider", "",
+		"LLM provider: azure, openai, anthropic, ollama (default: auto-detect)")
+	rootCmd.Flags().StringVar(&flagModel, "model", "",
+		"model name/deployment (default: provider-specific)")
 }
 
 // run resolves configuration from flags and interactive prompts, then calls pipeline.
@@ -181,17 +187,21 @@ func parseReports(raw string) map[string]bool {
 
 // pipeline executes the full analysis workflow.
 func pipeline(ctx context.Context, cfg tui.Config, outDir string) error {
-	// Create Claude client (detects API key or CLI, or stub for dry-run).
+	// Create LLM client (auto-detects provider or uses flag).
 	var client *analyze.Client
 	if flagDryRun {
-		printWarn("dry-run mode — Claude will not be called")
+		printWarn("dry-run mode — no LLM will be called")
 		client = analyze.NewDryRunClient()
 	} else {
 		var err error
-		client, err = analyze.NewClient()
+		client, err = analyze.NewClientWithConfig(analyze.ProviderConfig{
+			Provider: flagProvider,
+			Model:    flagModel,
+		})
 		if err != nil {
 			return err
 		}
+		printDone("Using %s provider", client.ProviderName())
 	}
 
 	// ── Phase 1: Discovery ────────────────────────────────────────────────────
@@ -366,8 +376,8 @@ func pipeline(ctx context.Context, cfg tui.Config, outDir string) error {
 
 	if !flagDryRun {
 		usage := client.GetUsage()
-		fmt.Printf("\n  %sClaude%s  %d calls  ·  %s tokens in  ·  %s tokens out\n",
-			ansiDim, ansiReset,
+		fmt.Printf("\n  %s%s%s  %d calls  ·  %s tokens in  ·  %s tokens out\n",
+			ansiDim, client.ProviderName(), ansiReset,
 			usage.Calls,
 			formatTokenCount(usage.InputTokens),
 			formatTokenCount(usage.OutputTokens),
